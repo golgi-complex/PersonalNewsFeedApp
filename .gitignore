@@ -1,0 +1,19 @@
+# Виртуальное окружение
+myenv/
+venv/
+ENV/
+
+# Конфигурации и секреты
+.env
+
+# Сессии Telethon
+*.session
+*.session-journal
+
+# Файлы данных пользователя (по желанию, если не хотите выгружать список каналов)
+channels.txt
+language.txt
+
+# Кеш Python
+__pycache__/
+*.py[cod]
