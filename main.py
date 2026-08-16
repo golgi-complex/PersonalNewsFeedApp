@@ -9,7 +9,6 @@ load_dotenv()
 API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-# Загружаем ID администратора
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
 
 CHANNELS_FILE = 'channels.txt'
@@ -42,8 +41,6 @@ def save_language(lang):
 target_channels = load_channels()
 current_lang = load_language()
 
-waiting_for_add = {}
-
 user_client = TelegramClient('user_session', API_ID, API_HASH)
 bot_client = TelegramClient('bot_session', API_ID, API_HASH)
 
@@ -67,17 +64,15 @@ TEXTS = {
     'ru': {
         'start_btn': "▶️ Старт",
         'list_btn': "📋 Список каналов",
-        'add_btn': "➕ Добавить канал",
         'clear_btn': "🧹 Очистить чат",
         'lang_btn': "🌐 English",
-        'welcome': "👋 **Управление лентой новостей**\n\nИспользуйте меню ниже для выбора действия:",
+        'welcome': (
+            "👋 **Управление лентой новостей**\n\n"
+            "💡 Чтобы добавить канал, просто отправьте его `@юзернейм` или ссылку `https://t.me/...` прямо в чат."
+        ),
         'empty_list': "📭 Список отслеживаемых каналов пуст.",
         'channel_list_title': "📋 **Отслеживаемые каналы:**",
         'delete_btn': "❌ Удалить",
-        'prompt_add': (
-            "✏️ Отправьте юзернейм или ссылку на канал (например: `@durov` или `https://t.me/durov`).\n\n"
-            "💡 _Удалить добавленный канал всегда можно через раздел 📋 **Список каналов**._"
-        ),
         'clearing': "⏳ Очищаю историю сообщений...",
         'cleared': "✨ Чат очищен! Клавиатура снова доступна:",
         'added_success': "✅ Канал `{channel}` успешно добавлен в список!",
@@ -88,17 +83,15 @@ TEXTS = {
     'en': {
         'start_btn': "▶️ Start",
         'list_btn': "📋 Channel List",
-        'add_btn': "➕ Add Channel",
         'clear_btn': "🧹 Clear Chat",
         'lang_btn': "🌐 Русский",
-        'welcome': "👋 **News Feed Management**\n\nUse the menu below to select an action:",
+        'welcome': (
+            "👋 **News Feed Management**\n\n"
+            "💡 To add a channel, simply send its `@username` or link `https://t.me/...` directly into the chat."
+        ),
         'empty_list': "📭 Tracked channels list is empty.",
         'channel_list_title': "📋 **Tracked Channels:**",
         'delete_btn': "❌ Delete",
-        'prompt_add': (
-            "✏️ Send the username or link of the channel (e.g. `@durov` or `https://t.me/durov`).\n\n"
-            "💡 _You can always delete a channel via 📋 **Channel List**._"
-        ),
         'clearing': "⏳ Clearing message history...",
         'cleared': "✨ Chat cleared! Keyboard is ready:",
         'added_success': "✅ Channel `{channel}` successfully added!",
@@ -112,8 +105,7 @@ def get_keyboard():
     t = TEXTS[current_lang]
     return [
         [Button.text(t['start_btn'], resize=True), Button.text(t['list_btn'])],
-        [Button.text(t['add_btn']), Button.text(t['clear_btn'])],
-        [Button.text(t['lang_btn'])]
+        [Button.text(t['clear_btn']), Button.text(t['lang_btn'])]
     ]
 
 # --- Обработчики команд бота ---
@@ -121,8 +113,6 @@ def get_keyboard():
 @bot_client.on(events.NewMessage(pattern=r'(/start|/menu|^▶️ Старт$|^▶️ Start$)'))
 @admin_only
 async def start_handler(event):
-    user_id = event.sender_id
-    waiting_for_add[user_id] = False
     await event.respond(TEXTS[current_lang]['welcome'], buttons=get_keyboard())
 
 # --- Переключение языка ---
@@ -130,8 +120,6 @@ async def start_handler(event):
 @admin_only
 async def switch_language_handler(event):
     global current_lang
-    user_id = event.sender_id
-    waiting_for_add[user_id] = False
 
     current_lang = 'en' if current_lang == 'ru' else 'ru'
     save_language(current_lang)
@@ -145,8 +133,6 @@ async def switch_language_handler(event):
 @bot_client.on(events.NewMessage(pattern=r'^(📋 Список каналов|📋 Channel List)$'))
 @admin_only
 async def list_channels_handler(event):
-    user_id = event.sender_id
-    waiting_for_add[user_id] = False
     t = TEXTS[current_lang]
 
     if not target_channels:
@@ -162,18 +148,6 @@ async def list_channels_handler(event):
     await event.respond(
         f"{t['channel_list_title']}\n\n{channels_list}",
         buttons=inline_buttons
-    )
-
-# --- Добавление канала ---
-@bot_client.on(events.NewMessage(pattern=r'^(➕ Добавить канал|➕ Add Channel)$'))
-@admin_only
-async def prompt_add_handler(event):
-    user_id = event.sender_id
-    waiting_for_add[user_id] = True
-
-    await event.respond(
-        TEXTS[current_lang]['prompt_add'],
-        buttons=get_keyboard()
     )
 
 # --- Удаление канала через инлайн-кнопку ---
@@ -195,8 +169,6 @@ async def inline_delete_handler(event):
 @bot_client.on(events.NewMessage(pattern=r'^(🧹 Очистить чат|🧹 Clear Chat)$'))
 @admin_only
 async def clear_chat_handler(event):
-    user_id = event.sender_id
-    waiting_for_add[user_id] = False
     t = TEXTS[current_lang]
 
     status_msg = await event.respond(t['clearing'])
@@ -219,54 +191,45 @@ async def clear_chat_handler(event):
         buttons=get_keyboard()
     )
 
-# --- Обработчик ввода имени канала ---
+# --- Автоматическое добавление канала по @юзернейму или ссылке ---
 @bot_client.on(events.NewMessage)
 @admin_only
 async def text_input_handler(event):
-    user_id = event.sender_id
     text = event.text.strip()
     t = TEXTS[current_lang]
 
     # Игнорируем системные кнопки
     all_buttons = []
     for lang in TEXTS.values():
-        all_buttons.extend([lang['start_btn'], lang['list_btn'], lang['add_btn'], lang['clear_btn'], lang['lang_btn']])
+        all_buttons.extend([lang['start_btn'], lang['list_btn'], lang['clear_btn'], lang['lang_btn']])
 
     if text in all_buttons or text.startswith('/'):
         return
 
-    if waiting_for_add.get(user_id):
+    # Если сообщение начинается с '@' или 'https://t.me/'
+    if text.startswith('@') or text.startswith('https://t.me/'):
         channel = text
-        if not channel.startswith('@') and not channel.startswith('https://t.me/'):
-            channel = f"@{channel}"
-
         target_channels.add(channel)
         save_channels(target_channels)
-        waiting_for_add[user_id] = False
 
         await event.respond(t['added_success'].format(channel=channel), buttons=get_keyboard())
-        return
 
 # --- Пересылка новостей из отслеживаемых каналов ---
 @user_client.on(events.NewMessage)
 async def handle_new_post(event):
-    # Работаем только с сообщениями из каналов
     if not event.is_channel:
         return
 
     chat = await event.get_chat()
 
-    # Приводим все сохранённые юзернеймы к чистому виду без '@' и ссылок
     normalized_target_channels = set()
     for ch in target_channels:
         clean_ch = ch.strip().lower().replace('https://t.me/', '').replace('@', '')
         normalized_target_channels.add(clean_ch)
 
-    # Получаем юзернейм и ID текущего канала
     chat_username = chat.username.lower() if getattr(chat, 'username', None) else None
     chat_id_str = str(chat.id)
 
-    # Проверяем совпадение
     is_target = False
     if chat_username and chat_username in normalized_target_channels:
         is_target = True
