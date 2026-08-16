@@ -258,6 +258,10 @@ async def main():
     await bot_client.start(bot_token=BOT_TOKEN)
     await user_client.start()
 
+    print("🔄 Загружаю список диалогов (чатов/каналов) для юзербота...")
+    await user_client.get_dialogs()
+    print("✅ Список диалогов загружен.")
+
     bot_info = await bot_client.get_me()
     user_info = await user_client.get_me()
 
