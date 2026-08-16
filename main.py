@@ -1,5 +1,6 @@
 import os
 import asyncio
+from functools import wraps
 from dotenv import load_dotenv
 from telethon import TelegramClient, events, Button
 
@@ -8,6 +9,8 @@ load_dotenv()
 API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+# Загружаем ваш ID администратора из .env
+ADMIN_ID = int(os.getenv('ADMIN_ID'))
 
 CHANNELS_FILE = 'channels.txt'
 LANG_FILE = 'language.txt'
@@ -43,6 +46,22 @@ waiting_for_add = {}
 
 user_client = TelegramClient('user_session', API_ID, API_HASH)
 bot_client = TelegramClient('bot_session', API_ID, API_HASH)
+
+# --- Декоратор приватного доступа ---
+
+def admin_only(func):
+    @wraps(func)
+    async def wrapper(event, *args, **kwargs):
+        # Проверяем, совпадает ли ID отправителя с вашим ADMIN_ID
+        if event.sender_id != ADMIN_ID:
+            # Для чужих пользователей отправляем сообщение об ограничении доступа
+            if isinstance(event, events.CallbackQuery.Event):
+                await event.answer("⛔ Доступ ограничен.", alert=True)
+            else:
+                await event.respond("⛔ Извините, это частный бот. Доступ разрешён только владельцу.")
+            return
+        return await func(event, *args, **kwargs)
+    return wrapper
 
 # --- Словарь локализации ---
 
@@ -102,6 +121,7 @@ def get_keyboard():
 # --- Обработчики команд бота ---
 
 @bot_client.on(events.NewMessage(pattern=r'(/start|/menu|^▶️ Старт$|^▶️ Start$)'))
+@admin_only
 async def start_handler(event):
     user_id = event.sender_id
     waiting_for_add[user_id] = False
@@ -110,6 +130,7 @@ async def start_handler(event):
 
 # --- Переключение языка ---
 @bot_client.on(events.NewMessage(pattern=r'^(🌐 English|🌐 Русский)$'))
+@admin_only
 async def switch_language_handler(event):
     global current_lang
     user_id = event.sender_id
@@ -125,6 +146,7 @@ async def switch_language_handler(event):
 
 # --- Список каналов ---
 @bot_client.on(events.NewMessage(pattern=r'^(📋 Список каналов|📋 Channel List)$'))
+@admin_only
 async def list_channels_handler(event):
     user_id = event.sender_id
     waiting_for_add[user_id] = False
@@ -147,6 +169,7 @@ async def list_channels_handler(event):
 
 # --- Добавление канала ---
 @bot_client.on(events.NewMessage(pattern=r'^(➕ Добавить канал|➕ Add Channel)$'))
+@admin_only
 async def prompt_add_handler(event):
     user_id = event.sender_id
     waiting_for_add[user_id] = True
@@ -158,6 +181,7 @@ async def prompt_add_handler(event):
 
 # --- Удаление канала через инлайн-кнопку ---
 @bot_client.on(events.CallbackQuery(pattern=r'del_(.+)'))
+@admin_only
 async def inline_delete_handler(event):
     channel = event.pattern_match.group(1).decode('utf-8')
     t = TEXTS[current_lang]
@@ -172,6 +196,7 @@ async def inline_delete_handler(event):
 
 # --- Очистка чата ---
 @bot_client.on(events.NewMessage(pattern=r'^(🧹 Очистить чат|🧹 Clear Chat)$'))
+@admin_only
 async def clear_chat_handler(event):
     user_id = event.sender_id
     waiting_for_add[user_id] = False
@@ -199,6 +224,7 @@ async def clear_chat_handler(event):
 
 # --- Обработчик ввода имени канала ---
 @bot_client.on(events.NewMessage)
+@admin_only
 async def text_input_handler(event):
     user_id = event.sender_id
     text = event.text.strip()
@@ -254,6 +280,7 @@ async def main():
 
     print(f"✅ Бот запущен: @{bot_info.username}")
     print(f"✅ Аккаунт подключён: {user_info.first_name}")
+    print(f"🔐 Владелец (ADMIN_ID): {ADMIN_ID}")
     print(f"🌐 Текущий язык: {current_lang.upper()}")
     print("🚀 Система готова к работе.")
 
