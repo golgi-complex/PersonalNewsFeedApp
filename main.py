@@ -11,8 +11,8 @@ API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
 
-CHANNELS_FILE = 'channels.txt'
-LANG_FILE = 'language.txt'
+CHANNELS_FILE = 'data/channels.txt'
+LANG_FILE = 'data/language.txt'
 
 # --- Работа с файлами данных ---
 
@@ -41,8 +41,8 @@ def save_language(lang):
 target_channels = load_channels()
 current_lang = load_language()
 
-user_client = TelegramClient('user_session', API_ID, API_HASH)
-bot_client = TelegramClient('bot_session', API_ID, API_HASH)
+user_client = TelegramClient('data/user_session', API_ID, API_HASH)
+bot_client = TelegramClient('data/bot_session', API_ID, API_HASH)
 
 # --- Декоратор приватного доступа ---
 
