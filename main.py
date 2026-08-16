@@ -9,7 +9,7 @@ load_dotenv()
 API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-# Загружаем ваш ID администратора из .env
+# Загружаем ID администратора
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
 
 CHANNELS_FILE = 'channels.txt'
@@ -52,9 +52,7 @@ bot_client = TelegramClient('bot_session', API_ID, API_HASH)
 def admin_only(func):
     @wraps(func)
     async def wrapper(event, *args, **kwargs):
-        # Проверяем, совпадает ли ID отправителя с вашим ADMIN_ID
         if event.sender_id != ADMIN_ID:
-            # Для чужих пользователей отправляем сообщение об ограничении доступа
             if isinstance(event, events.CallbackQuery.Event):
                 await event.answer("⛔ Доступ ограничен.", alert=True)
             else:
@@ -125,7 +123,6 @@ def get_keyboard():
 async def start_handler(event):
     user_id = event.sender_id
     waiting_for_add[user_id] = False
-
     await event.respond(TEXTS[current_lang]['welcome'], buttons=get_keyboard())
 
 # --- Переключение языка ---
@@ -230,7 +227,7 @@ async def text_input_handler(event):
     text = event.text.strip()
     t = TEXTS[current_lang]
 
-    # Игнорируем нажатия кнопок из клавиатур любого языка
+    # Игнорируем системные кнопки
     all_buttons = []
     for lang in TEXTS.values():
         all_buttons.extend([lang['start_btn'], lang['list_btn'], lang['add_btn'], lang['clear_btn'], lang['lang_btn']])
@@ -250,25 +247,48 @@ async def text_input_handler(event):
         await event.respond(t['added_success'].format(channel=channel), buttons=get_keyboard())
         return
 
-# --- Пересылка новостей ---
+# --- Пересылка новостей из отслеживаемых каналов ---
 @user_client.on(events.NewMessage)
 async def handle_new_post(event):
-    chat = await event.get_chat()
-    username = f"@{chat.username}" if getattr(chat, 'username', None) else None
+    # Работаем только с сообщениями из каналов
+    if not event.is_channel:
+        return
 
-    if username and username.lower() in [ch.lower() for ch in target_channels]:
+    chat = await event.get_chat()
+
+    # Приводим все сохранённые юзернеймы к чистому виду без '@' и ссылок
+    normalized_target_channels = set()
+    for ch in target_channels:
+        clean_ch = ch.strip().lower().replace('https://t.me/', '').replace('@', '')
+        normalized_target_channels.add(clean_ch)
+
+    # Получаем юзернейм и ID текущего канала
+    chat_username = chat.username.lower() if getattr(chat, 'username', None) else None
+    chat_id_str = str(chat.id)
+
+    # Проверяем совпадение
+    is_target = False
+    if chat_username and chat_username in normalized_target_channels:
+        is_target = True
+    elif chat_id_str in normalized_target_channels:
+        is_target = True
+
+    if is_target:
         chat_title = getattr(chat, 'title', 'Канал')
         news_text = f"📰 **{chat_title}**\n\n{event.text or ''}"
 
-        me = await user_client.get_me()
+        print(f"📥 Получен новый пост из: {chat_title} (@{chat_username})")
 
         try:
             if event.media:
-                await bot_client.send_file(me.id, event.media, caption=news_text)
+                await bot_client.send_file(ADMIN_ID, event.media, caption=news_text)
             else:
-                await bot_client.send_message(me.id, news_text)
+                await bot_client.send_message(ADMIN_ID, news_text)
+            print(f"✅ Пост из '{chat_title}' переслан владельцу.")
         except Exception as e:
-            print(f"Ошибка пересылки: {e}")
+            print(f"❌ Ошибка пересылки поста из '{chat_title}': {e}")
+
+# --- Запуск клиентов ---
 
 async def main():
     print("Запуск системы...")
@@ -279,10 +299,10 @@ async def main():
     user_info = await user_client.get_me()
 
     print(f"✅ Бот запущен: @{bot_info.username}")
-    print(f"✅ Аккаунт подключён: {user_info.first_name}")
+    print(f"✅ Юзербот подключён: {user_info.first_name}")
     print(f"🔐 Владелец (ADMIN_ID): {ADMIN_ID}")
-    print(f"🌐 Текущий язык: {current_lang.upper()}")
-    print("🚀 Система готова к работе.")
+    print(f"🌐 Язык интерфейса: {current_lang.upper()}")
+    print("🚀 Отслеживание новостей активно.")
 
     await asyncio.gather(
         user_client.run_until_disconnected(),
