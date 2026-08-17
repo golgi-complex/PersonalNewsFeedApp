@@ -218,23 +218,39 @@ async def handle_new_post(event):
 
         try:
             if event.media:
-                # Скачиваем медиа во временный файл
+                print(f"📥 Скачиваю медиа из '{chat_title}'...")
+                # Скачиваем медиа во временный файл от лица юзербота
                 media_path = await user_client.download_media(event.media)
 
-                try:
-                    if len(news_text) <= 1024:
-                        await bot_client.send_file(ADMIN_ID, media_path, caption=news_text)
-                    else:
-                        await bot_client.send_file(ADMIN_ID, media_path)
-                        await bot_client.send_message(ADMIN_ID, news_text)
-                finally:
-                    # Гарантированно удаляем медиафайл после отправки
-                    if media_path and os.path.exists(media_path):
-                        os.remove(media_path)
+                if media_path and os.path.exists(media_path):
+                    try:
+                        file_size = os.path.getsize(media_path)
+                        print(f"📤 Отправляю медиа ({file_size} байт) ботом...")
+
+                        if len(news_text) <= 1024:
+                            await bot_client.send_file(
+                                ADMIN_ID,
+                                media_path,
+                                caption=news_text,
+                                supports_streaming=True
+                            )
+                        else:
+                            await bot_client.send_file(
+                                ADMIN_ID,
+                                media_path,
+                                supports_streaming=True
+                            )
+                            await bot_client.send_message(ADMIN_ID, news_text)
+                    finally:
+                        # Удаляем временный файл с диска
+                        if os.path.exists(media_path):
+                            os.remove(media_path)
+                else:
+                    await bot_client.send_message(ADMIN_ID, news_text)
             else:
                 await bot_client.send_message(ADMIN_ID, news_text)
 
-            print(f"✅ Пост из '{chat_title}' переслан в чат с ботом.")
+            print(f"✅ Пост из '{chat_title}' успешно переслан.")
         except Exception as e:
             print(f"❌ Ошибка пересылки из '{chat_title}': {e}")
 
