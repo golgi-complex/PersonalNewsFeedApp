@@ -17,3 +17,6 @@ language.txt
 # Кеш Python
 __pycache__/
 *.py[cod]
+
+# Папка с данными
+data/
