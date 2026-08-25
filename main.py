@@ -10,7 +10,7 @@ from telethon.errors import FloodWaitError, ChannelPrivateError, UsernameInvalid
 
 load_dotenv()
 
-API_ID = int(os.getenv('API_ID'))
+API_ID = int(os.parse_env('API_ID') if os.getenv('API_ID') else os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 _conn = None
 
 def get_db() -> sqlite3.Connection:
-    """Возвращает единственное соединение с БД (singleton)."""
+    # Возвращает единственное соединение с БД (singleton)
     global _conn
     if _conn is None:
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -61,7 +61,7 @@ def get_db() -> sqlite3.Connection:
 
 
 def init_db():
-    """Создаёт таблицы если их нет."""
+    # Создаёт таблицы если их нет
     conn = get_db()
     cursor = conn.cursor()
 
@@ -87,6 +87,13 @@ def init_db():
             PRIMARY KEY (user_id, channel)
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_messages (
+            user_id INTEGER,
+            msg_id INTEGER,
+            PRIMARY KEY (user_id, msg_id)
+        )
+    ''')
     conn.commit()
     logger.info("База данных инициализирована.")
 
@@ -94,22 +101,48 @@ def init_db():
 init_db()
 
 # ==============================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД ДЛЯ СООБЩЕНИЙ
+# ==============================
+
+def save_msg_id(user_id: int, msg_id: int):
+    # Сохраняет ID сообщения для последующего удаления
+    if not msg_id:
+        return
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO user_messages (user_id, msg_id) VALUES (?, ?)",
+        (user_id, msg_id)
+    )
+    conn.commit()
+
+
+def get_and_clear_user_messages(user_id: int) -> list:
+    # Возвращает список ID сообщений пользователя и удаляет их из БД
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT msg_id FROM user_messages WHERE user_id = ?", (user_id,)
+    ).fetchall()
+    msg_ids = [row['msg_id'] for row in rows]
+
+    conn.execute("DELETE FROM user_messages WHERE user_id = ?", (user_id,))
+    conn.commit()
+    return msg_ids
+
+# ==============================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ==============================
 
 def normalize_channel_name(ch: str) -> str | None:
-    # Нормализует имя канала и проверяет его валидность. Возвращает None если имя невалидно.
     ch = ch.strip().lower()
     ch = ch.replace('https://t.me/', '').replace('@', '').split('/')[0]
 
-    # Telegram username: только буквы, цифры, подчёркивание, длина 3-32
     if not re.match(r'^[a-z0-9_]{3,32}$', ch):
         return None
     return ch
 
 
 def update_user_activity(user_id: int):
-    """Обновляет время последней активности пользователя."""
+    # Обновляет время последней активности пользователя
     conn = get_db()
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     conn.execute('''
@@ -143,13 +176,7 @@ def get_user_channels(user_id: int) -> list:
 
 
 def add_user_channel(user_id: int, channel: str) -> bool:
-    """
-    Добавляет канал пользователю.
-    У администратора нет лимита каналов.
-    Возвращает False если превышен лимит каналов.
-    """
     conn = get_db()
-    # У администратора нет лимита
     if user_id != ADMIN_ID:
         count = conn.execute(
             "SELECT COUNT(*) as cnt FROM user_channels WHERE user_id = ?", (user_id,)
@@ -213,7 +240,6 @@ def update_last_seen_id(user_id: int, channel: str, msg_id: int):
 
 
 def cleanup_inactive_users(days_limit: int):
-    """Удаляет пользователей и их данные если они не заходили N дней."""
     conn = get_db()
     cutoff_date = (datetime.now() - timedelta(days=days_limit)).strftime('%Y-%m-%d %H:%M:%S')
     inactive = conn.execute(
@@ -228,6 +254,7 @@ def cleanup_inactive_users(days_limit: int):
             conn.execute("DELETE FROM users WHERE user_id = ?", (u_id,))
             conn.execute("DELETE FROM user_channels WHERE user_id = ?", (u_id,))
             conn.execute("DELETE FROM last_seen_ids WHERE user_id = ?", (u_id,))
+            conn.execute("DELETE FROM user_messages WHERE user_id = ?", (u_id,))
         conn.commit()
 
 # ==============================
@@ -251,7 +278,7 @@ TEXTS = {
             "👋 **Ваша приватная лента новостей**\n\n"
             "💡 Отправьте `@юзернейм` или ссылку на публичный канал, "
             "чтобы получать из него новости.\n\n"
-            f"⚠️ Максимум каналов: {MAX_CHANNELS_PER_USER}"
+            f"⚠️ Лимит ограничен полдпиской на {MAX_CHANNELS_PER_USER} каналов"
         ),
         'empty_list': "📭 Ваш список отслеживаемых каналов пуст.",
         'channel_list_title': "📋 **Ваши отслеживаемые каналы:**",
@@ -274,7 +301,7 @@ TEXTS = {
         'welcome': (
             "👋 **Your Private News Feed**\n\n"
             "💡 Send `@username` or channel link to get updates.\n\n"
-            f"⚠️ Max channels: {MAX_CHANNELS_PER_USER}"
+            f"⚠️ Subscription limit is {MAX_CHANNELS_PER_USER} channels"
         ),
         'empty_list': "📭 Your tracked channels list is empty.",
         'channel_list_title': "📋 **Your Tracked Channels:**",
@@ -293,7 +320,6 @@ TEXTS = {
 
 
 def t(user_id: int, key: str) -> str:
-    # Возвращает строку локализации для пользователя.
     lang = get_user_lang(user_id)
     return TEXTS.get(lang, TEXTS['ru'])[key]
 
@@ -316,29 +342,39 @@ def get_keyboard(user_id: int):
 @bot_client.on(events.NewMessage(pattern=r'(/start|/menu|^▶️ Старт$|^▶️ Start$)'))
 async def start_handler(event):
     user_id = event.sender_id
+    save_msg_id(user_id, event.message.id)
     update_user_activity(user_id)
-    await event.respond(t(user_id, 'welcome'), buttons=get_keyboard(user_id))
+
+    res = await event.respond(t(user_id, 'welcome'), buttons=get_keyboard(user_id))
+    save_msg_id(user_id, res.id)
     logger.info(f"Пользователь {user_id} открыл меню.")
 
 
 @bot_client.on(events.NewMessage(pattern=r'^(🌐 English|🌐 Русский)$'))
 async def switch_language_handler(event):
     user_id = event.sender_id
+    save_msg_id(user_id, event.message.id)
     update_user_activity(user_id)
+
     current_lang = get_user_lang(user_id)
     new_lang = 'en' if current_lang == 'ru' else 'ru'
     set_user_lang(user_id, new_lang)
-    await event.respond(TEXTS[new_lang]['lang_changed'], buttons=get_keyboard(user_id))
+
+    res = await event.respond(TEXTS[new_lang]['lang_changed'], buttons=get_keyboard(user_id))
+    save_msg_id(user_id, res.id)
 
 
 @bot_client.on(events.NewMessage(pattern=r'^(📋 Мои каналы|📋 My Channels)$'))
 async def list_channels_handler(event):
     user_id = event.sender_id
+    save_msg_id(user_id, event.message.id)
     update_user_activity(user_id)
+
     channels = get_user_channels(user_id)
 
     if not channels:
-        await event.respond(t(user_id, 'empty_list'), buttons=get_keyboard(user_id))
+        res = await event.respond(t(user_id, 'empty_list'), buttons=get_keyboard(user_id))
+        save_msg_id(user_id, res.id)
         return
 
     lang = get_user_lang(user_id)
@@ -350,10 +386,12 @@ async def list_channels_handler(event):
     ]
     channels_list = "\n".join([f"• @{ch}" for ch in channels])
     count_info = f"({len(channels)}/{MAX_CHANNELS_PER_USER if user_id != ADMIN_ID else '∞'})"
-    await event.respond(
+
+    res = await event.respond(
         f"{texts['channel_list_title']} {count_info}\n\n{channels_list}",
         buttons=inline_buttons
     )
+    save_msg_id(user_id, res.id)
 
 
 @bot_client.on(events.CallbackQuery(pattern=r'del_(.+)'))
@@ -376,37 +414,50 @@ async def inline_delete_handler(event):
 async def clear_chat_handler(event):
     user_id = event.sender_id
     update_user_activity(user_id)
-    await event.respond(t(user_id, 'clearing'))
 
-    bot_info = await bot_client.get_me()
-    messages_to_delete = []
+    # Добавляем само сообщение нажатия кнопки в список
+    save_msg_id(user_id, event.message.id)
 
-    async for message in user_client.iter_messages(bot_info.id):
-        messages_to_delete.append(message.id)
-        if len(messages_to_delete) >= 100:
-            await user_client.delete_messages(bot_info.id, messages_to_delete, revoke=True)
-            messages_to_delete = []
+    status_msg = await event.respond(t(user_id, 'clearing'))
 
-    if messages_to_delete:
-        await user_client.delete_messages(bot_info.id, messages_to_delete, revoke=True)
-        await bot_client.send_message(
-            event.chat_id,
-            t(user_id, 'cleared'),
-            buttons=get_keyboard(user_id)
-        )
-    logger.info(f"Пользователь {user_id} очистил чат.")
+    msg_ids = get_and_clear_user_messages(user_id)
+
+    # Удаляем пачками по 100 элементов (ограничение Telegram API)
+    for i in range(0, len(msg_ids), 100):
+        batch = msg_ids[i:i + 100]
+        try:
+            await bot_client.delete_messages(user_id, batch)
+        except Exception as e:
+            logger.error(f"Ошибка при удалении сообщений для {user_id}: {e}")
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    final_msg = await bot_client.send_message(
+        user_id,
+        t(user_id, 'cleared'),
+        buttons=get_keyboard(user_id)
+    )
+    save_msg_id(user_id, final_msg.id)
+    logger.info(f"Пользователь {user_id} очистил свой чат.")
 
 
 @bot_client.on(events.NewMessage(pattern=r'^📜 Логи$'))
 async def show_logs_handler(event):
     user_id = event.sender_id
+    save_msg_id(user_id, event.message.id)
+
     if user_id != ADMIN_ID:
-        await event.respond("⛔ Доступ запрещён.")
+        res = await event.respond("⛔ Доступ запрещён.")
+        save_msg_id(user_id, res.id)
         return
 
     log_path = 'data/bot.log'
     if not os.path.exists(log_path):
-        await event.respond("📭 Лог-файл пуст или не найден.")
+        res = await event.respond("📭 Лог-файл пуст или не найден.")
+        save_msg_id(user_id, res.id)
         return
 
     with open(log_path, 'r', encoding='utf-8') as f:
@@ -414,7 +465,8 @@ async def show_logs_handler(event):
 
     last_lines = lines[-MAX_LOG_LINES:]
     log_text = "".join(last_lines)
-    await event.respond(f"📜 **Последние {MAX_LOG_LINES} строк лога:**\n\n```\n{log_text}\n```")
+    res = await event.respond(f"📜 **Последние {MAX_LOG_LINES} строк лога:**\n\n```\n{log_text}\n```")
+    save_msg_id(user_id, res.id)
 
 
 @bot_client.on(events.NewMessage)
@@ -422,7 +474,6 @@ async def text_input_handler(event):
     user_id = event.sender_id
     text = event.text.strip()
 
-    # Игнорируем нажатия кнопок и команды
     all_buttons = ["📜 Логи"]
     for lang_texts in TEXTS.values():
         all_buttons.extend([
@@ -435,38 +486,39 @@ async def text_input_handler(event):
     if text in all_buttons or text.startswith('/'):
         return
 
-    # Обрабатываем только если похоже на канал
     if not (text.startswith('@') or text.startswith('https://t.me/')):
         return
 
+    save_msg_id(user_id, event.message.id)
     update_user_activity(user_id)
 
-    # Валидация имени канала
     clean_ch = normalize_channel_name(text)
     if not clean_ch:
-        await event.respond(t(user_id, 'invalid_channel'), buttons=get_keyboard(user_id))
+        res = await event.respond(t(user_id, 'invalid_channel'), buttons=get_keyboard(user_id))
+        save_msg_id(user_id, res.id)
         return
 
-    # Проверяем — уже есть в списке?
     user_channels = get_user_channels(user_id)
     if clean_ch in user_channels:
-        await event.respond(
+        res = await event.respond(
             t(user_id, 'already_added').format(channel=clean_ch),
             buttons=get_keyboard(user_id)
         )
+        save_msg_id(user_id, res.id)
         return
 
-    # Добавляем с проверкой лимита
     success = add_user_channel(user_id, clean_ch)
     if not success:
         limit_msg = t(user_id, 'limit_reached')
-        await event.respond(limit_msg, buttons=get_keyboard(user_id))
+        res = await event.respond(limit_msg, buttons=get_keyboard(user_id))
+        save_msg_id(user_id, res.id)
         return
 
-    await event.respond(
+    res = await event.respond(
         t(user_id, 'added_success').format(channel=clean_ch),
         buttons=get_keyboard(user_id)
     )
+    save_msg_id(user_id, res.id)
     logger.info(f"Пользователь {user_id} добавил канал @{clean_ch}.")
 
 # ==============================
@@ -474,32 +526,36 @@ async def text_input_handler(event):
 # ==============================
 
 async def send_post_to_user(user_id: int, news_text: str, msg):
-    """Отправляет пост (с медиа или без) пользователю."""
+    # Отправляет пост пользователю и сохраняет ID отправленных сообщений
     if msg.media:
         media_path = await user_client.download_media(msg.media)
         if media_path and os.path.exists(media_path):
             try:
                 if len(news_text) <= MAX_CAPTION_LENGTH:
-                    await bot_client.send_file(
+                    res = await bot_client.send_file(
                         user_id, media_path,
                         caption=news_text,
                         supports_streaming=True
                     )
+                    save_msg_id(user_id, res.id)
                 else:
-                    await bot_client.send_file(user_id, media_path, supports_streaming=True)
-                    await bot_client.send_message(user_id, news_text)
+                    res1 = await bot_client.send_file(user_id, media_path, supports_streaming=True)
+                    res2 = await bot_client.send_message(user_id, news_text)
+                    save_msg_id(user_id, res1.id)
+                    save_msg_id(user_id, res2.id)
             finally:
                 if os.path.exists(media_path):
                     os.remove(media_path)
         else:
-            await bot_client.send_message(user_id, news_text)
+            res = await bot_client.send_message(user_id, news_text)
+            save_msg_id(user_id, res.id)
     else:
-        await bot_client.send_message(user_id, news_text)
+        res = await bot_client.send_message(user_id, news_text)
+        save_msg_id(user_id, res.id)
 
 
 async def fetch_channel_posts_loop():
-    """Фоновая задача: проверяет новые посты в каналах каждые CHECK_INTERVAL секунд."""
-    await asyncio.sleep(5)  # небольшая пауза перед первым запуском
+    await asyncio.sleep(5)
 
     while True:
         unique_channels = get_all_unique_channels()
@@ -514,7 +570,6 @@ async def fetch_channel_posts_loop():
                     for user_id in users:
                         last_id = get_last_seen_id(user_id, channel)
 
-                        # Получаем все новые посты начиная с последнего просмотренного
                         messages = await user_client.get_messages(
                             channel,
                             min_id=last_id,
@@ -524,12 +579,10 @@ async def fetch_channel_posts_loop():
                         if not messages:
                             continue
 
-                        # Если первый запуск — просто сохраняем ID, не отправляем
                         if last_id == 0:
                             update_last_seen_id(user_id, channel, messages[0].id)
                             continue
 
-                        # Отправляем посты от старого к новому
                         chat = await user_client.get_entity(channel)
                         chat_title = getattr(chat, 'title', channel)
 
@@ -554,13 +607,12 @@ async def fetch_channel_posts_loop():
 
 
 async def cleanup_loop():
-    """Фоновая задача: удаляет неактивных пользователей раз в сутки."""
     while True:
         try:
             cleanup_inactive_users(INACTIVITY_DAYS)
         except Exception as e:
             logger.error(f"Ошибка при очистке неактивных пользователей: {e}")
-        await asyncio.sleep(86400)  # раз в сутки
+        await asyncio.sleep(86400)
 
 # ==============================
 # ЗАПУСК
