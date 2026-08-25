@@ -13,18 +13,20 @@ load_dotenv()
 API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_ID = int(os.getenv('ADMIN_ID'))
 
 # ==============================
 # КОНСТАНТЫ
 # ==============================
 
 DB_PATH = 'data/database.sqlite'
-CHECK_INTERVAL = 600          # Интервал проверка каналов (сек)
+CHECK_INTERVAL = 600          # Интервал проверки каналов (сек)
 DELAY_BETWEEN_CHANNELS = 60    # Пауза между запросами к каналам (сек)
 INACTIVITY_DAYS = 60          # Дней неактивности до удаления пользователя
 MAX_CHANNELS_PER_USER = 10    # Максимум каналов на одного пользователя
 MAX_CAPTION_LENGTH = 1024     # Максимальная длина подписи к медиа в Telegram
 MAX_POSTS_PER_CHECK = 20      # Максимум новых постов за одну проверку канала
+MAX_LOG_LINES = 30            # Сколько последних строк лога показывать
 
 # ==============================
 # ЛОГИРОВАНИЕ
@@ -96,7 +98,7 @@ init_db()
 # ==============================
 
 def normalize_channel_name(ch: str) -> str | None:
-    #     Нормализует имя канала и проверяет его валидность. Возвращает None если имя невалидно.
+    # Нормализует имя канала и проверяет его валидность. Возвращает None если имя невалидно.
     ch = ch.strip().lower()
     ch = ch.replace('https://t.me/', '').replace('@', '').split('/')[0]
 
@@ -143,15 +145,18 @@ def get_user_channels(user_id: int) -> list:
 def add_user_channel(user_id: int, channel: str) -> bool:
     """
     Добавляет канал пользователю.
+    У администратора нет лимита каналов.
     Возвращает False если превышен лимит каналов.
     """
     conn = get_db()
-    count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM user_channels WHERE user_id = ?", (user_id,)
-    ).fetchone()['cnt']
+    # У администратора нет лимита
+    if user_id != ADMIN_ID:
+        count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM user_channels WHERE user_id = ?", (user_id,)
+        ).fetchone()['cnt']
 
-    if count >= MAX_CHANNELS_PER_USER:
-        return False
+        if count >= MAX_CHANNELS_PER_USER:
+            return False
 
     conn.execute(
         "INSERT OR IGNORE INTO user_channels (user_id, channel) VALUES (?, ?)",
@@ -296,10 +301,13 @@ def t(user_id: int, key: str) -> str:
 def get_keyboard(user_id: int):
     lang = get_user_lang(user_id)
     texts = TEXTS.get(lang, TEXTS['ru'])
-    return [
+    keyboard = [
         [Button.text(texts['start_btn'], resize=True), Button.text(texts['list_btn'])],
         [Button.text(texts['clear_btn']), Button.text(texts['lang_btn'])]
     ]
+    if user_id == ADMIN_ID:
+        keyboard.append([Button.text("📜 Логи")])
+    return keyboard
 
 # ==============================
 # ОБРАБОТЧИКИ КОМАНД
@@ -341,7 +349,7 @@ async def list_channels_handler(event):
         for ch in channels
     ]
     channels_list = "\n".join([f"• @{ch}" for ch in channels])
-    count_info = f"({len(channels)}/{MAX_CHANNELS_PER_USER})"
+    count_info = f"({len(channels)}/{MAX_CHANNELS_PER_USER if user_id != ADMIN_ID else '∞'})"
     await event.respond(
         f"{texts['channel_list_title']} {count_info}\n\n{channels_list}",
         buttons=inline_buttons
@@ -389,13 +397,33 @@ async def clear_chat_handler(event):
     logger.info(f"Пользователь {user_id} очистил чат.")
 
 
+@bot_client.on(events.NewMessage(pattern=r'^📜 Логи$'))
+async def show_logs_handler(event):
+    user_id = event.sender_id
+    if user_id != ADMIN_ID:
+        await event.respond("⛔ Доступ запрещён.")
+        return
+
+    log_path = 'data/bot.log'
+    if not os.path.exists(log_path):
+        await event.respond("📭 Лог-файл пуст или не найден.")
+        return
+
+    with open(log_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    last_lines = lines[-MAX_LOG_LINES:]
+    log_text = "".join(last_lines)
+    await event.respond(f"📜 **Последние {MAX_LOG_LINES} строк лога:**\n\n```\n{log_text}\n```")
+
+
 @bot_client.on(events.NewMessage)
 async def text_input_handler(event):
     user_id = event.sender_id
     text = event.text.strip()
 
     # Игнорируем нажатия кнопок и команды
-    all_buttons = []
+    all_buttons = ["📜 Логи"]
     for lang_texts in TEXTS.values():
         all_buttons.extend([
             lang_texts['start_btn'],
@@ -431,7 +459,8 @@ async def text_input_handler(event):
     # Добавляем с проверкой лимита
     success = add_user_channel(user_id, clean_ch)
     if not success:
-        await event.respond(t(user_id, 'limit_reached'), buttons=get_keyboard(user_id))
+        limit_msg = t(user_id, 'limit_reached')
+        await event.respond(limit_msg, buttons=get_keyboard(user_id))
         return
 
     await event.respond(
